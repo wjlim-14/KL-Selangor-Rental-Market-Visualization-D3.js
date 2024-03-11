@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script src="https://d3js.org/d3.v7.js"></script>
+
+<head>
+    <title>Map Dashboard</title>
+
+    <style>
+        body {
+            font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Trebuchet MS', sans-serif;
+            font-size: 14px;
+        }
+        h1 {
+            text-align: center;
+        }
+        .topnav {
+            background-color: #be3455;
+            overflow: hidden;
+        }
+        .topnav a {
+            float: left;
+            color: #f2f2f2;
+            text-align: center;
+            padding: 14px 16px;
+            text-decoration: none;
+            font-size: 17px;
+        }
+        .topnav a:hover {
+            background-color: #ffa7ca;
+            color: black;
+        }
+        .topnav a.active {
+            background-color: #1a6b54;
+            color: white;
+        }
+        #container {
+            display: flex;
+        }
+        #map {
+            flex: 1;
+        }
+        #bar-chart-container {
+            flex: 1;
+            height: 600px;
+            overflow-y: hidden;
+            padding: 10px;
+            margin-top: 20px;
+        }
+        #toolbox-container {
+            padding: 10px;
+            column-gap: 100px;
+            justify-content: space-between;
+        }
+        div.tooltip {
+            position: absolute;
+            text-align: center;
+            min-width: 120px;
+            padding: 8px;
+            font-size: 14px;
+            background-color: #f9f9f9;
+            border: 1px solid #d3d3d3;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="topnav">
+        <a class="active">KL-Selangor Rental Market</a>
+        <a href="dashboard1.html">Map</a>
+        <a href="dashboard2.html">Charts</a>
+    </div>
+
+    <h1>Map View of Property for Rent in KL-Selangor</h1>
+    <div id="container">
+        <div id="toolbox-container">
+            <svg id="rent-legend" width="200" height="70"></svg>
+            <div>
+                <label for="filter_prop_type">Show property types:</label><br/>
+                <input type="checkbox" id="all" name="all" value="All" checked>All</input><br/>
+                <input type="checkbox" id="apartment" name="apartment" value="Apartment" checked>Apartment</input><br/>
+                <input type="checkbox" id="condominium" name="condominium" value="Condominium" checked>Condominium</input><br/>
+                <input type="checkbox" id="serviceResidence" name="serviceResidence" value="Service Residence" checked>Service Residence</input><br/>
+                <input type="checkbox" id="studio" name="studio" value="Studio" checked>Studio</input><br/>
+                <input type="checkbox" id="townhouseCondo" name="townhouseCondo" value="Townhouse Condo" checked>Townhouse Condo</input><br/>
+                <input type="checkbox" id="duplex" name="duplex" value="Duplex" checked>Duplex</input><br/>
+                <input type="checkbox" id="flat" name="flat" value="Flat" checked>Flat</input><br/>
+                <input type="checkbox" id="others" name="others" value="Others" checked>Others</input><br/>
+            </div>
+            <br/>
+            <svg id="legend" width="200" height="200"></svg><br/>
+        </div>
+        <svg id="map" width="800" height="750"></svg>
+        
+        <div id="bar-chart-container">
+            <div id="bar-chart-title"></div>
+            <div id="bar-chart-pane">
+                <svg id="bar-chart" width="600" height="600"></svg>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // the svg
+        const mapSvg = d3.select("#map"),
+            width = +mapSvg.attr("width"),
+            height = +mapSvg.attr("height");
+
+        const barChartSvg = d3.select("#bar-chart");
+
+        const barChartBoxSvg = d3.select("#bar-chart-title")
+            .style("margin-bottom", "20px");
+
+        const barChartMargin = { top: 50, right: 20, bottom: 40, left: 150 },
+            barChartWidth = 600 - barChartMargin.left - barChartMargin.right;
+            barChartHeight = 600 - barChartMargin.top - barChartMargin.bottom;
+
+        // tooltip
+        var barChartTooltip = d3.select("#bar-chart-pane")
+            .append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
+
+        var div = d3.select("body")
+            .append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
+
+        // legend
+        const legend = d3.select("#legend")
+            .append("g")
+            .attr("class", "legend");
+
+        const propertyTypes = ["Apartment", "Condominium", "Service Residence", "Studio", "Townhouse Condo", "Duplex", "Flat", "Others"];
+        const propertyColorScale = d3.scaleOrdinal()
+            .domain(propertyTypes)
+            .range(["#F28E2B", "#E15759", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"]);
+        
+        const legendItems = legend.selectAll(".legend-item")
+            .data(propertyTypes)
+            .enter()
+            .append("g")
+            .attr("class", "legend-item")
+            .attr("transform", function(d, i) {
+                const x = 0;
+                const y = i * 20;
+                return "translate(" + x + "," + y + ")";
+            });
+
+        // map and projection
+        const path = d3.geoPath();
+        const projection = d3.geoMercator()
+            .scale(30000)
+            .center([101.55, 3.15])
+            .translate([width / 2, height / 2]);
+
+        // define the zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([1, 10])
+            .on("zoom", zoomed);
+
+        mapSvg.call(zoom);
+
+        function zoomed() {
+            mapSvg.attr("transform", d3.zoomTransform(this))
+        }
+
+        // data and color scale
+        const mapData = new Map();
+        const rentColorScale = d3.scaleThreshold()
+            .domain([500, 1500, 2500, 3500, 4500, 5500, 6500])
+            .range(d3.schemeBlues[6]);
+
+        const Rentlegend = d3.select("#rent-legend")
+            .append("svg")
+            .attr("class", "rent-legend");
+
+        // define the legend properties
+        const legendWidth = 170;
+        const legendHeight = 20;
+        const legendX = 10;
+        const legendY = 20;
+
+        // calculate the width of each legend segment
+        const segmentWidth = legendWidth / rentColorScale.range().length;
+        
+        // create the legend rectangles
+        Rentlegend.selectAll("rect")
+            .data(rentColorScale.range())
+            .enter()
+            .append("rect")
+            .attr("x", (d, i) => legendX + i * segmentWidth)
+            .attr("y", legendY)
+            .attr("width", segmentWidth)
+            .attr("height", legendHeight)
+            .style("fill", (d) => d);
+
+        // add legend labels
+        Rentlegend.selectAll("text")
+            .data(rentColorScale.domain())
+            .enter()
+            .append("text")
+            .attr("x", (d, i) => legendX + i * segmentWidth)
+            .attr("y", legendY + legendHeight + 15)
+            .text((d) => d)
+            .style("font-size", "12px")
+            .attr("text-anchor", "middle");
+
+        // add legend title
+        Rentlegend.append("text")
+            .attr("x", legendX)
+            .attr("y", legendY - 10)
+            .text("Average Rental (RM)")
+            .style("font-size", "12px")
+            .style("font-weight", "bold");
+
+        // load data
+        Promise.all([
+            d3.json("selangor_kl_map.geojson"),
+            d3.csv("mudah-apartment-kl-selangor-cleaned.csv")
+        ]).then(function(data) {
+
+            let geoData = data[0];
+            let csvData = data[1];
+
+            // calculate average monthly rent for each location
+            let rentData = d3.group(csvData, d => d.location);
+            for (let [location, rents] of rentData) {
+                let averageRent = d3.mean(rents, d => d.monthly_rent);
+                mapData.set(location, averageRent);
+            }
+
+            function mouseOverLocation (event, d) {
+                d3.selectAll(".location")
+                    .transition()
+                    .duration(200)
+                    .style("opacity", .5);
+                d3.select(this)
+                    .transition()
+                    .duration(200)
+                    .style("opacity", 1)
+                    .style("stroke", "black");
+                div.transition()
+                    .duration(200)
+                    .style("opacity", .9);
+                const averageRent = mapData.get(d.properties.Nama);
+                if (!isNaN(averageRent)) {
+                    div.html(d.properties.Nama + "<br/>" + "Average Rent: RM" + Math.round(averageRent)); 
+                } else {
+                    div.html(d.properties.Nama);
+                }
+                div.style("left", (event.pageX) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            };
+
+            function mouseLeaveLocation (d) {
+                d3.selectAll(".location")
+                    .transition()
+                    .duration(200)
+                    .style("opacity", .8)
+                    .style("stroke", "transparent");
+                div.transition()
+                    .duration(200)
+                    .style("opacity", 0);
+            };
+
+            function mouseOverProperty (event, d) {
+                d3.select(this)
+                    .transition()
+                    .duration(200)
+                    .style("opacity", 1)
+                    .style("stroke", "black");
+                div.transition()
+                    .duration(200)
+                    .style("opacity", .9);
+                div.html(
+                    d.prop_name + "<br/>" +
+                    "Monthly rent: RM" + d.monthly_rent + "<br/>" +
+                    "Location: " + d.location + "<br/>" +
+                    "Property type: " + d.property_type + "<br/>" +
+                    "Completion year: " + d.completion_year + "<br/>" +
+                    "Room: " + d.rooms + "<br/>" +
+                    "Bathroom: " + d.bathroom + "<br/>" +
+                    "Parking: " + d.parking + "<br/>" +
+                    "Size: " + d.size + " sq.ft.<br/>" +
+                    "Furnish condition: " + d.furnished
+                )
+                    .style("left", (event.pageX) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+            };
+
+            function mouseLeaveProperty (d) {
+                div.transition()
+                    .duration(200)
+                    .style("opacity", 0);
+                d3.select(this)
+                    .transition()
+                    .duration(200)
+                    .style("stroke", "transparent");
+            };
+
+            function clickLocation (event, d) {
+                d3.selectAll(".location")
+                    .transition()
+                    .duration(200)
+                    .style("opacity", .5);
+                d3.select(this)
+                    .transition()
+                    .duration(200)
+                    .style("opacity", 1)
+                    .style("stroke", "black");
+                div.transition()
+                    .duration(200)
+                    .style("opacity", .9);
+                div.html(d.properties.Nama);
+                div.style("left", (event.pageX) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                                
+                document.getElementById("bar-chart-container").style.overflowY = "scroll";
+    
+                // get the property data for the selected location
+                const locationData = rentData.get(d.properties.Nama);
+                selected_location = d.properties.Nama
+                if (locationData) {
+                    plotBarChart(Array.from(locationData), selected_location);
+                } else {
+                    barChartSvg.selectAll("*").remove();
+                    barChartBoxSvg.selectAll("*").remove();
+                }
+            };
+
+            // draw the map
+            const locationPaths = mapSvg
+                .append("g")
+                .selectAll("path")
+                .data(geoData.features)
+                .enter()
+                .append("path")
+                .attr("d", d3.geoPath().projection(projection))
+                .attr("fill", function(d) {
+                    d.rent = mapData.get(d.properties.Nama) || 0;
+                    return rentColorScale(d.rent);
+                })
+                .style("stroke", "transparent")
+                .attr("class", function(d) {
+                    return "location";
+                })
+                .style("opacity", 0.8)
+                .on("click", clickLocation)
+                .on("mouseover", mouseOverLocation)
+                .on("mouseleave", mouseLeaveLocation);
+
+            // plot coordinates from CSV file
+            const propertyPoints = mapSvg
+                .append("g")
+                .selectAll("circle")
+                .data(csvData)
+                .enter()
+                .append("circle")
+                .attr("cx", function(d) {
+                    return projection([d.longitude, d.latitude])[0];
+                })
+                .attr("cy", function(d) {
+                    return projection([d.longitude, d.latitude])[1];
+                })
+                .attr("r", 2)
+                .style("fill", function(d) {
+                    return propertyColorScale(d.property_type);
+                })
+                .on("mouseover", mouseOverProperty)
+                .on("mouseleave", mouseLeaveProperty);
+
+            // add rectangles to represent colors
+            legendItems.append("rect")
+                .attr("width", 12)
+                .attr("height", 12)
+                .attr("fill", function(d) {
+                    return propertyColorScale(d);
+                });
+
+            // add text labels
+            legendItems.append("text")
+                .attr("x", 20)
+                .attr("y", 10)
+                .text(function(d) {
+                    return d;
+                });
+            
+            // filter properties based on checkbox selection
+            const checkboxes = d3.selectAll("#toolbox-container input[type=checkbox]");
+
+            // function to show properties based on checkbox selection
+            function showProperties() {
+                const allCheckbox = document.getElementById("all");
+                const selectedPropertyTypes = checkboxes.nodes()
+                    .filter(checkbox => checkbox.checked && checkbox.value !== "All")
+                    .map(checkbox => checkbox.value);
+
+                console.log(selectedPropertyTypes.length)
+
+                if (selectedPropertyTypes.length === 0) {
+                    propertyPoints.style("opacity", 0)
+                        .style("display", "none");
+                } else if (allCheckbox.checked) {
+                    propertyPoints
+                        .style("opacity", d => selectedPropertyTypes.includes(d.property_type) ? 1 : 0)
+                        .style("display", d => selectedPropertyTypes.includes(d.property_type) ? "block" : "none");
+                } else {
+                    propertyPoints.transition()
+                        .duration(1000)
+                        .style("opacity", d => {
+                            return selectedPropertyTypes.includes(d.property_type) || selectedPropertyTypes.length === 0 ? 1 : 0;
+                        });
+
+                    propertyPoints.style("display", d => {
+                        return selectedPropertyTypes.includes(d.property_type) || selectedPropertyTypes.length === 0 ? "block" : "none";
+                    });
+                }
+            }
+
+            // add event listener to the "All" checkbox
+            const allCheckbox = document.getElementById("all");
+                allCheckbox.addEventListener("change", function() {
+                checkboxes.property("checked", this.checked);
+                showProperties();
+            });
+
+            // add event listener to other checkboxes
+            checkboxes.on("change", function() {
+                const allChecked = checkboxes.nodes().every(checkbox => checkbox.checked);
+                allCheckbox.checked = allChecked;
+                showProperties();
+            });
+
+            // bar chart
+            function plotBarChart(locationData, selected_location) {
+                // clear previous bar chart
+                barChartSvg.selectAll("*").remove();
+                barChartBoxSvg.selectAll("*").remove();
+
+                // calculate count of each property name Sort property names based on the count in descending order
+                const propertyCounts = Array.from(
+                    d3.rollup(
+                        locationData,
+                        (v) => v.length,
+                        (d) => d.prop_name
+                    ),
+                    ([prop_name, count]) => ({ prop_name, count })
+                );
+                propertyCounts.sort((a, b) => b.count - a.count);
+
+                // calculate the required height of the bar chart
+                barChartHeight = propertyCounts.length * 25;
+
+                // adjust the height of the SVG element
+                barChartSvg.attr("height", barChartHeight);
+
+                // set up scales for the bar chart
+                const xScale = d3.scaleLinear()
+                    .domain([0, d3.max(propertyCounts, (d) => d.count)])
+                    .range([0, barChartWidth]);
+
+                const yScale = d3.scaleBand()
+                    .domain(propertyCounts.map((d) => d.prop_name))
+                    .range([0, barChartHeight])
+                    .padding(0.1);
+
+                // append the title to the SVG container
+                barChartBoxSvg.append("text")
+                    .attr("class", "chart-title")
+                    .attr("x", (barChartWidth + barChartMargin.left + barChartMargin.right) / 2)
+                    .attr("y", barChartMargin.top / 2)
+                    .attr("text-anchor", "middle")
+                    .style("font-weight", "bold")
+                    .text("Property count in " + selected_location);
+
+                // Create the initial bars with a width of 0
+                barChartSvg.selectAll("rect")
+                    .data(propertyCounts, (d) => d.prop_name)
+                    .enter()
+                    .append("rect")
+                    .attr("x", barChartMargin.left)
+                    .attr("y", (d) => yScale(d.prop_name))
+                    .attr("width", 0)
+                    .attr("height", yScale.bandwidth())
+                    .attr("fill", "steelblue")
+                    .classed("bar-rect", true)
+                    .on("mouseover", function(event, d) {
+                        d3.selectAll(".bar-rect")
+                        .transition()
+                        .duration(200)
+                        .style("opacity", 0.5);
+                        d3.select(this)
+                        .transition()
+                        .duration(200)
+                        .style("opacity", 1)
+                        .style("stroke", "black");
+                        barChartTooltip.transition()
+                        .duration(200)
+                        .style("opacity", 0.9);
+                        barChartTooltip.html(d.prop_name + "<br/>" + d.count)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 15) + "px");
+                    })
+                    .on("mouseout", function() {
+                        d3.selectAll(".bar-rect")
+                        .transition()
+                        .duration(200)
+                        .style("opacity", 0.8)
+                        .style("stroke", "transparent");
+                        barChartTooltip.transition()
+                        .duration(200)
+                        .style("opacity", 0);
+                    });
+
+                // transition the width of the bars to their respective values
+                barChartSvg.selectAll("rect")
+                .transition()
+                .duration(800)
+                .attr("width", (d) => xScale(d.count));
+
+                // create the bars
+                barChartSvg.selectAll("rect")
+                    .data(propertyCounts, (d) => d.prop_name)
+                    .enter()
+                    .append("rect")
+                    .attr("x", barChartMargin.left)
+                    .attr("y", (d) => yScale(d.prop_name))
+                    .attr("width", (d) => xScale(d.count))
+                    .attr("height", yScale.bandwidth())
+                    .attr("fill", "steelblue")
+                    .on("mouseover", function(event, d) {
+                        d3.selectAll(".bar-rect")
+                            .transition()
+                            .duration(200)
+                            .style("opacity", .5);
+                        d3.select(this)
+                            .transition()
+                            .duration(200)
+                            .style("opacity", 1)
+                            .style("stroke", "black");
+                        barChartTooltip.transition()
+                            .duration(200)
+                            .style("opacity", .9);
+                        barChartTooltip.html(d.prop_name + "<br/>" + d.count)
+                            .style("left", (event.pageX + 10) + "px")
+                            .style("top", (event.pageY - 15) + "px");
+                    })
+                    .on("mouseout", function() {
+                        d3.selectAll(".bar-rect")
+                            .transition()
+                            .duration(200)
+                            .style("opacity", .8)
+                            .style("stroke", "transparent");
+                        barChartTooltip.transition()
+                            .duration(200)
+                            .style("opacity", 0);
+                    })
+                    .classed("bar-rect", true);
+
+                barChartSvg.selectAll(".prop-label")
+                    .data(propertyCounts, (d) => d.prop_name)
+                    .enter()
+                    .append("text")
+                    .attr("class", "prop-label")
+                    .attr("x", 0)
+                    .attr("y", (d) => yScale(d.prop_name) + yScale.bandwidth() / 2)
+                    .attr("dy", "0.35em")
+                    .style("text-anchor", "start")
+                    .text((d) => {
+                        const label = d.prop_name;
+                        const maxLength = 20;
+                        return label.length > maxLength ? `${label.slice(0, maxLength)}...` : label;
+                    })
+                    .attr("fill", "black")
+                    .style("font-size", "14px");
+
+                // add labels for counts inside the bars
+                barChartSvg.selectAll(".count-label")
+                    .data(propertyCounts, (d) => d.prop_name)
+                    .enter()
+                    .append("text")
+                    .attr("class", "count-label")
+                    .attr("x", (d) => xScale(d.count) + barChartMargin.left + 5)
+                    .attr("y", (d) => yScale(d.prop_name) + yScale.bandwidth() / 2)
+                    .attr("dy", "0.35em")
+                    .text((d) => d.count)
+                    .attr("fill", "red")
+                    .style("font-size", "14px")
+                    .style("text-anchor", "start");
+            }
+        });
+    </script>
+</body>
+
+</html>
